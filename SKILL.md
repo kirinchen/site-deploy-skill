@@ -26,7 +26,9 @@ license: MIT
    - 連結和圖片一律用**相對路徑**(`style.css`,不要 `/style.css`)。GitHub Pages 專案站的網址是 `https://OWNER.github.io/REPO/` [S4],所以 `/style.css` 會指到 `OWNER.github.io/style.css`,不在這個網站裡(這是推論,不是官方原文)。
    - `find . -type l` 有 symlink → **停**,問使用者:打包時 symlink 會被展開成實際檔案,指到資料夾外的話,外面的檔案也會被公開 [S8]。
 3. 工具在不在:`git --version`、`gh --version`、`gh auth status`。沒有 `gh` → 請使用者照 https://cli.github.com 安裝;沒登入 → 見「你幫不了的三步」。
-4. git 身分:`git config user.email` 是空的 → **不要用 `--global`、不要用使用者的私人 email**,只替這個 repo 設 GitHub 的 noreply 地址(要先 `git init`):
+4. git 身分:commit 上的 email 會跟著公開 repo 一起公開。
+   - `git config user.email` 有值、而且不是 `@users.noreply.github.com` → **commit 之前**跟使用者說「commit 會帶著 <那個 email> 公開,要改用 GitHub 的 noreply 地址嗎?」(建議改),等他回答。
+   - 是空的、或使用者說要改 → **不要用 `--global`、不要用使用者的私人 email**,只替這個 repo 設 noreply 地址(要先 `git init`):
    ```bash
    LOGIN=$(gh api user -q .login); ID=$(gh api user -q .id)
    git config user.name "$LOGIN"; git config user.email "$ID+$LOGIN@users.noreply.github.com"
