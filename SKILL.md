@@ -6,6 +6,8 @@ license: MIT
 
 # site-deploy:一句話把網站部署上線
 
+> v0.3(2026-11-06):Cloudflare 段照實測修過(帳號層級 token、用 API 建專案、API 綁網域要自己補 CNAME)。
+
 使用者只會講一句話。你要把它變成一個**真的打得開的網址**,過程中盡量不叫使用者打指令。
 
 **流程固定三步:需求 → 本機預覽 → 上線。** 先讓使用者在自己電腦上看到網站、說好,再問要放哪個平台,最後才部署。
@@ -170,10 +172,18 @@ for i in 1 2 3; do code=$(curl -s -o /dev/null -w '%{http_code}' "$URL"); echo "
 
 ```bash
 set -a; . ~/.config/site-deploy/cloudflare.env; set +a
-npx wrangler@4 pages project list | grep -qw NAME && echo "已經有同名專案 → 停,問使用者"
-npx wrangler@4 pages project create NAME --production-branch main \
-  && npx wrangler@4 pages deploy _site --project-name NAME --branch main      # [S15]
+CF=https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects
+H="Authorization: Bearer $CLOUDFLARE_API_TOKEN"          # 不要 echo 這一行
+# 1) 同名專案存在?(回 success:true = 已存在 → 停,問使用者)
+curl -s -H "$H" "$CF/NAME" | grep -q '"success":true' && echo "已經有同名專案 → 停,問使用者"
+# 2) 用 API 建專案(🔴 不要用 wrangler pages project create:2026-11-06 實測 wrangler 4.158 會轉去建 Workers 而失敗)
+curl -s -X POST -H "$H" -H 'Content-Type: application/json' "$CF" \
+  -d '{"name":"NAME","production_branch":"main"}' | grep -q '"success":true' || echo "建專案失敗 → 讀回應的 errors"
+# 3) 上傳
+npx wrangler@4 pages deploy _site --project-name NAME --branch main      # [S15]
 ```
+
+   - 建專案回 `8000000` / 權限錯誤 → token 多半是在**個人層級**(My Profile → API Tokens)建的;請使用者改到**帳號層級**的 Account API Tokens 重建(見「你幫不了的三步」)。
 
    - `--branch` 一定要寫,而且要等於建專案時的 production branch。在 git repo 裡 wrangler 會自己讀目前分支,不一致(例如 `master`)就會變成預覽版 `BRANCH.NAME.pages.dev`,正式網址沒更新 [S13]。
    - 部署完正式網址是 `https://NAME.pages.dev`,用第 1 條路第 7 步的 curl 兩行驗到 200。
@@ -181,7 +191,8 @@ npx wrangler@4 pages project create NAME --production-branch main \
    - 網域在同一個 Cloudflare 帳號(例如在 Cloudflare 買的)→ 確認後 CNAME 會自動加好 [S16][S18]。
    - 根網域(`example.com`)一定要是同帳號的 Cloudflare zone;子網域的 DNS 在別家 → 在那家加 CNAME 指向 `NAME.pages.dev` [S16]。
    - **一定先在後台綁,再加 DNS**。沒先綁就手動加 CNAME 會 522 [S16]。不要自己先建 DNS 紀錄。
-   - 也可以用 API 加:`POST https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/pages/projects/NAME/domains`,body `{"name":"DOMAIN"}`,header 用 `Authorization: Bearer $CLOUDFLARE_API_TOKEN`(不要把 header 印出來)[S17]。API 失敗或 DNS 沒接上,就改請使用者用上面的後台流程。
+   - **預設請使用者在後台按**(上面那條路):後台綁會自動加好 CNAME,token 不用多給 DNS 權限。
+   - 也可以用 API 綁:`POST $CF/NAME/domains`,body `{"name":"DOMAIN"}` [S17]。🔴 2026-11-06 實測:**API 綁網域不會自動加 CNAME**,還要自己用 DNS API 加一筆 `CNAME DOMAIN → NAME.pages.dev`(proxied),而這需要 token 多一條「限定網域 / DNS / Edit」權限。使用者沒給這條權限 → 改請他在後台按。
 7. **驗證**:`https://DOMAIN/` 用同樣的 curl 兩行驗到 200。新網域要等憑證發下來,第一次不是 200 很正常,重試幾分鐘再判斷。
 
 ### (選用)push 就自動部署
@@ -224,7 +235,11 @@ GitHub Pages 和設了自動部署的 Cloudflare Pages,push 就會自己上線;�
    - Cloudflare 註冊:https://dash.cloudflare.com/sign-up 。
    - 買網域(要付錢):https://dash.cloudflare.com/?to=/:account/registrar/register (Cloudflare Registrar)。Cloudflare 是成本價(註冊局 + ICANN 的費用,不加價),**不是免費** [S18][S23]。
 2. **金鑰**(權限給到剛好):
-   - Cloudflare API token:打開 https://dash.cloudflare.com/?to=/:account/api-tokens (Account API Tokens 頁)→ **Create Token → Custom Token「Get started」→ 取名 → Permissions 選 Account / Cloudflare Pages / Edit → Continue to summary → Create Token** [S14]。只給這一項,不要給整個帳號。token 只顯示一次,請他直接存進金鑰檔。
+   - Cloudflare API token:🔴 一定要在**帳號層級**建:打開 https://dash.cloudflare.com/?to=/:account/api-tokens (Manage account → **Account API Tokens**)。**不要**用右上角頭像 → My Profile → API Tokens(個人層級;2026-11-06 實測用它建 Pages 專案回 `8000000`)。
+     → **Create Token → Custom Token「Get started」→ 取名** → 權限(2026-11 後台是 policy 介面):
+     - 一條 policy,範圍選 **整個帳號(Entire Account)**:權限 **Cloudflare Pages → Edit**。
+     - 只有要讓 agent 用 API 綁網域時,才另加一條 policy,範圍選**那一個網域**:權限 **DNS → Edit**。🔴 Pages 權限不要放進「限定網域」那條,放錯會失效。
+     → **Continue to summary → Create Token**。token 只顯示一次,請他直接貼進金鑰檔。不要給整個帳號的所有權限。
    - Account ID:打開 https://dash.cloudflare.com/?to=/:account/workers-and-pages ,在 **Account Details** 區塊按 **Account ID** 旁的複製鈕(或在任何頁面按 Ctrl/Cmd+K,搜尋 `Copy account ID`)[S24]。不需要先有網域。
 3. **帳單**(門檻請他自己看,不要替他升級):
    - GitHub 方案:https://docs.github.com/en/get-started/learning-about-github/githubs-plans 。Pages 限制:網站最多 1GB、每月頻寬 100GB(soft limit)[S20]。
